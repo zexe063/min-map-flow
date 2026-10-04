@@ -6,3 +6,4 @@ test-results/
 .env.*
 !.env.example
 *.tsbuildinfo
+.Cap 2026-10-04 at 17.36.38
