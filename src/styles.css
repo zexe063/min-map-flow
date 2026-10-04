@@ -1,0 +1,82 @@
+:root { font-family: Arial, Helvetica, sans-serif; color: #111827; background: #fff; font-synthesis: none; text-rendering: optimizeLegibility; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+* { box-sizing: border-box; }
+body { margin: 0; }
+button, textarea { font: inherit; }
+button { cursor: pointer; }
+button:disabled { cursor: wait; opacity: .55; }
+button:focus-visible { outline: 3px solid #93c5fd; outline-offset: 3px; }
+button svg { flex-shrink: 0; }
+.editor-layout { display: flex; height: 100dvh; min-height: 460px; overflow: hidden; }
+.text-sidebar { width: 360px; flex-shrink: 0; display: flex; flex-direction: column; min-height: 0; background: #fff; border-right: 1px solid #e5e7eb; z-index: 2; }
+.sidebar-tab { height: 44px; padding: 0 24px; display: flex; align-items: center; gap: 9px; flex-shrink: 0; font-size: 14px; font-weight: 600; background: #fefce8; border-bottom: 1px solid #e5e7eb; }
+.syntax-panel { padding: 15px 16px 12px; border-bottom: 1px solid #e5e7eb; background: #fefce8; flex-shrink: 0; }
+.syntax-panel h1 { font-size: 18px; line-height: 1.4; margin: 0 0 8px; font-weight: 600; }
+.syntax-panel > p { margin: 0 0 11px; font-size: 14px; line-height: 1.6; }
+.syntax-row { display: flex; gap: 7px; align-items: center; margin: 6px 0; font-size: 13px; }
+.syntax-row code { font-family: inherit; font-size: 12px; padding: 6px 8px; border-radius: 6px; white-space: nowrap; line-height: 1.3; }
+.marker-dark { background: #111827; color: white; }
+.marker-topic { background: #fcff00; color: #111; border: 1px solid #facc15; }
+.marker-subtopic { background: #ffe59a; color: #111; border: 1px solid #fdba74; }
+.syntax-panel > .formula-hint { margin: 13px 0 10px; font-size: 12px; color: #57534e; }
+.formula-hint code { font-size: 12px; color: #292524; }
+.syntax-panel > label { display: block; font-size: 14px; }
+.roadmap-input { display: block; flex: 1; min-height: 90px; width: 100%; padding: 13px 16px; border: 0; border-radius: 0; outline: none; resize: none; background: white; color: #52525b; font: 15px/1.65 Arial, Helvetica, sans-serif; tab-size: 2; }
+.roadmap-input::placeholder { color: #9ca3af; }
+.roadmap-input:focus { box-shadow: inset 3px 0 #e5e7eb; }
+.sidebar-footer { padding: 12px 20px 8px; flex-shrink: 0; background: white; }
+.generate-button { background: #000; color: white; border: 1px solid #000; border-radius: 7px; width: 100%; min-height: 44px; padding: 10px 13px; display: flex; align-items: center; justify-content: center; gap: 8px; font-size: 16px; }
+.generate-button:hover { background: #1f2937; }
+.save-state { min-height: 22px; margin-top: 5px; color: #9ca3af; display: flex; align-items: center; justify-content: center; gap: 4px; font-size: 10px; text-align: center; }
+.editor-error { font-size: 12px; line-height: 1.5; margin: 0; padding: 9px 13px; max-height: 110px; overflow-y: auto; color: #991b1b; border-top: 1px solid #fecaca; border-bottom: 1px solid #fecaca; background: #fef2f2; }
+.diagram-canvas { flex: 1; min-width: 0; height: 100%; position: relative; background: #fff; }
+.pdf-button { position: absolute; top: 17px; right: 20px; z-index: 5; min-height: 35px; display: flex; align-items: center; justify-content: center; gap: 7px; padding: 8px 12px; border: 1px solid #d1d5db; border-radius: 6px; background: #fff; color: #111827; font-size: 12px; box-shadow: 0 1px 2px #00000008; }
+.pdf-button:hover:not(:disabled) { background: #f9fafb; border-color: #9ca3af; }
+.react-flow__controls { display: flex; left: 20px !important; bottom: 20px !important; margin: 0 !important; border: 1px solid #e5e7eb; border-radius: 5px; overflow: hidden; box-shadow: 0 1px 3px #0000000a !important; }
+.react-flow__controls-button { border-bottom: 0 !important; border-right: 1px solid #e5e7eb !important; width: 31px !important; height: 31px !important; }
+.react-flow__controls-button:last-child { border-right: 0 !important; }
+.react-flow__attribution { background: #fffffff0 !important; font-size: 8px !important; color: #a1a1aa; }
+.react-flow__edge-path { stroke-linecap: round; }
+.roadmap-tails { position: absolute; top: 0; left: 0; overflow: visible; pointer-events: none; }
+.react-flow__node { cursor: grab; }
+.react-flow__node.dragging { cursor: grabbing; }
+.export-stage-holder { position: fixed; top: 0; left: -50000px; pointer-events: none; z-index: -10; }
+.export-stage { position: relative; background: #fff; overflow: hidden; }
+.export-edges { position: absolute; inset: 0; }
+.export-stage .export-card { position: absolute; height: auto; box-shadow: none; }
+.spin { animation: spin 1s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+@media (max-width: 800px) {
+  .text-sidebar { width: 310px; }
+  .syntax-panel { padding: 12px; }
+  .syntax-panel h1 { font-size: 16px; }
+  .syntax-panel > p { font-size: 13px; }
+  .syntax-row { font-size: 12px; gap: 5px; }
+  .syntax-row code { font-size: 11px; padding: 5px 7px; }
+  .roadmap-input { font-size: 14px; padding-left: 12px; }
+  .sidebar-footer { padding-right: 14px; padding-left: 14px; }
+  .pdf-button { top: 12px; right: 12px; font-size: 11px; padding: 8px; }
+}
+@media (max-width: 560px) {
+  .editor-layout { flex-direction: column; height: auto; min-height: 100dvh; overflow: visible; }
+  .text-sidebar { width: 100%; height: 540px; border-right: 0; border-bottom: 1px solid #d1d5db; }
+  .sidebar-tab { padding: 0 16px; height: 39px; }
+  .syntax-panel { padding: 10px 16px; }
+  .syntax-panel h1 { font-size: 17px; }
+  .syntax-panel > p { margin-bottom: 7px; }
+  .syntax-row { margin: 4px 0; }
+  .syntax-panel > .formula-hint { margin: 9px 0 6px; }
+  .roadmap-input { min-height: 125px; padding: 10px 16px; }
+  .sidebar-footer { padding: 8px 16px 4px; }
+  .generate-button { min-height: 39px; font-size: 15px; }
+  .save-state { min-height: 18px; }
+  .diagram-canvas { flex: none; width: 100%; height: 75dvh; min-height: 460px; }
+}
+@media (max-height: 680px) and (min-width: 561px) {
+  .syntax-panel { padding-top: 10px; padding-bottom: 10px; }
+  .syntax-panel > p { font-size: 12px; margin-bottom: 6px; }
+  .syntax-panel h1 { font-size: 16px; margin-bottom: 6px; }
+  .syntax-row { margin: 4px 0; font-size: 12px; }
+  .syntax-row code { font-size: 11px; padding: 4px 6px; }
+  .syntax-panel > .formula-hint { margin: 9px 0 6px; }
+  .sidebar-footer { padding-top: 8px; }
+}
