@@ -1,4 +1,4 @@
-:root { font-family: Arial, Helvetica, sans-serif; color: #111827; background: #fff; font-synthesis: none; text-rendering: optimizeLegibility; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
+:root { font-family: var(--app-font); color: #111827; background: #fff; font-synthesis: none; text-rendering: optimizeLegibility; -webkit-font-smoothing: antialiased; -moz-osx-font-smoothing: grayscale; }
 * { box-sizing: border-box; }
 body { margin: 0; }
 button, textarea { font: inherit; }
@@ -20,7 +20,7 @@ button svg { flex-shrink: 0; }
 .syntax-panel > .formula-hint { margin: 13px 0 10px; font-size: 12px; color: #57534e; }
 .formula-hint code { font-size: 12px; color: #292524; }
 .syntax-panel > label { display: block; font-size: 14px; }
-.roadmap-input { display: block; flex: 1; min-height: 90px; width: 100%; padding: 13px 16px; border: 0; border-radius: 0; outline: none; resize: none; background: white; color: #52525b; font: 15px/1.65 Arial, Helvetica, sans-serif; tab-size: 2; }
+.roadmap-input { display: block; flex: 1; min-height: 90px; width: 100%; padding: 13px 16px; border: 0; border-radius: 0; outline: none; resize: none; background: white; color: #52525b; font: 15px/1.65 var(--app-font); tab-size: 2; }
 .roadmap-input::placeholder { color: #9ca3af; }
 .roadmap-input:focus { box-shadow: inset 3px 0 #e5e7eb; }
 .sidebar-footer { padding: 12px 20px 8px; flex-shrink: 0; background: white; }

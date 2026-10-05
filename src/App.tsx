@@ -3,7 +3,7 @@ import {
   ReactFlow, ReactFlowProvider, Controls, ConnectionMode, applyNodeChanges,
   useNodesInitialized, useReactFlow, ViewportPortal, type NodeChange, type Viewport,
 } from '@xyflow/react';
-import { Box, Check, Download, LoaderCircle, AlignLeft } from 'lucide-react';
+import { Box, Check, LoaderCircle, AlignLeft, Download } from 'lucide-react';
 import ChapterNode from './components/ChapterNode';
 import ExportStage from './components/ExportStage';
 import RoadmapTails from './components/RoadmapTails';
@@ -120,15 +120,13 @@ function TextToRoadmap() {
     } catch (failure) { setError(messageOf(failure)); }
   };
 
-  const downloadPdf = async () => {
+  const downloadMap = async () => {
     if (!stageRef.current) return;
     setExporting(true); setError('');
     try {
-      const { exportPdf } = await import('./lib/export');
-      await document.fonts.ready;
-      await new Promise<void>(resolve => requestAnimationFrame(() => requestAnimationFrame(() => resolve())));
-      await exportPdf(stageRef.current, currentRef.current);
-    } catch (failure) { setError(`PDF export failed: ${messageOf(failure)}`); }
+      const { downloadDiagramPDF } = await import('./lib/export');
+      await downloadDiagramPDF(stageRef.current, chapter.title);
+    } catch (failure) { setError(`Could not export the map: ${messageOf(failure)}`); }
     finally { setExporting(false); }
   };
 
@@ -136,45 +134,47 @@ function TextToRoadmap() {
     updateChapter(previous => ({ ...previous, viewport }));
   }, [updateChapter]);
 
-  return <div className="editor-layout">
-    <aside className="text-sidebar" aria-label="Text to roadmap">
-      <div className="sidebar-tab"><AlignLeft size={19} strokeWidth={1.8} />Text to roadmap</div>
-      <section className="syntax-panel" aria-labelledby="text-heading">
-        <h1 id="text-heading">Generate Roadmap from Text</h1>
-        <p>Write a single topic on each line. Starting characters decide the type of each node.</p>
-        <div className="syntax-row"><code className="marker-dark"># Roadmap Title</code><span>The title</span></div>
-        <div className="syntax-row"><code className="marker-dark">## Parent Label</code><span>A section label</span></div>
-        <div className="syntax-row"><code className="marker-topic">### Parent Topic</code><span>A main topic</span></div>
-        <div className="syntax-row"><code className="marker-subtopic">- Subtopic</code><span>A subtopic</span></div>
-        <p className="formula-hint">Math: <code>$x^2$</code> or <code>{'$$\\frac{a}{b}$$'}</code></p>
-        <label htmlFor="roadmap-text">Start writing below:</label>
-      </section>
-      <textarea id="roadmap-text" aria-label="Roadmap text" className="roadmap-input"
-        value={draft} onChange={event => { updateChapter(previous => ({ ...previous, draftOutline: event.target.value })); setError(''); }}
-        placeholder={'# Roadmap Title\n## Parent Label\n### Parent Topic\n- Subtopic\n- Formula: $E = mc^2$'}
-        spellCheck={false} maxLength={150_000} />
-      {(error || saveError) && <p className="editor-error" role="alert">{error || saveError}</p>}
-      <div className="sidebar-footer">
-        <button className="generate-button" onClick={generate}><Box size={21} />Generate Roadmap</button>
-        <span className="save-state" role="status">{dirty ? 'Text changed — generate to update the map' : saved ? <><Check size={12} />Saved in this browser</> : 'Saving…'}</span>
-      </div>
-    </aside>
-    <main className="diagram-canvas" ref={canvasRef} aria-label="Roadmap diagram">
-      <ReactFlow<MapNode> key={`${chapter.id}-${generation}`}
-        nodes={chapter.nodes} edges={displayEdges} nodeTypes={nodeTypes}
-        onNodesChange={onNodesChange} onMoveEnd={rememberViewport}
-        defaultViewport={chapter.viewport} fitView={!chapter.viewport} fitViewOptions={{ padding: 0.12, maxZoom: 1 }}
-        nodesConnectable={false} edgesReconnectable={false} connectionMode={ConnectionMode.Loose}
-        deleteKeyCode={null} minZoom={0.05} maxZoom={2} onlyRenderVisibleElements={false}
-        defaultEdgeOptions={{ type: 'default' }}>
-        <Controls showInteractive={false} position="bottom-left" fitViewOptions={{ padding: 0.2, maxZoom: 1 }} />
-        <ViewportPortal><svg className="roadmap-tails" width="1" height="1"><RoadmapTails nodes={chapter.nodes} /></svg></ViewportPortal>
-      </ReactFlow>
-      <button className="pdf-button" onClick={() => void downloadPdf()} disabled={exporting || needsLayout || !initialized || !chapter.nodes.length}>
-        {exporting ? <LoaderCircle className="spin" size={16} /> : <Download size={16} />}
-        {exporting ? 'Making PDF…' : 'Download A4 PDF'}
-      </button>
-    </main>
+  return <div className="app-shell">
+    <div className="editor-layout">
+      <aside className="text-sidebar" aria-label="Text to roadmap">
+        <div className="sidebar-tab"><AlignLeft size={19} strokeWidth={1.8} />Text to roadmap</div>
+        <section className="syntax-panel" aria-labelledby="text-heading">
+          <h1 id="text-heading">Generate Roadmap from Text</h1>
+          <p>Write a single topic on each line. Starting characters decide the type of each node.</p>
+          <div className="syntax-row"><code className="marker-dark"># Roadmap Title</code><span>The title</span></div>
+          <div className="syntax-row"><code className="marker-dark">## Parent Label</code><span>A section label</span></div>
+          <div className="syntax-row"><code className="marker-topic">### Parent Topic</code><span>A main topic</span></div>
+          <div className="syntax-row"><code className="marker-subtopic">- Subtopic</code><span>A subtopic</span></div>
+          <p className="formula-hint">Math: <code>$x^2$</code> or <code>{'$$\\frac{a}{b}$$'}</code></p>
+          <label htmlFor="roadmap-text">Start writing below:</label>
+        </section>
+        <textarea id="roadmap-text" aria-label="Roadmap text" className="roadmap-input"
+          value={draft} onChange={event => { updateChapter(previous => ({ ...previous, draftOutline: event.target.value })); setError(''); }}
+          placeholder={'# Roadmap Title\n## Parent Label\n### Parent Topic\n- Subtopic\n- Formula: $E = mc^2$'}
+          spellCheck={false} maxLength={150_000} />
+        {(error || saveError) && <p className="editor-error" role="alert">{error || saveError}</p>}
+        <div className="sidebar-footer">
+          <button className="generate-button" onClick={generate}><Box size={21} />Generate Roadmap</button>
+          <span className="save-state" role="status">{dirty ? 'Text changed — generate to update the map' : saved ? <><Check size={12} />Saved in this browser</> : 'Saving…'}</span>
+        </div>
+      </aside>
+      <main className="diagram-canvas" ref={canvasRef} aria-label="Roadmap diagram">
+        <ReactFlow<MapNode> key={`${chapter.id}-${generation}`}
+          nodes={chapter.nodes} edges={displayEdges} nodeTypes={nodeTypes}
+          onNodesChange={onNodesChange} onMoveEnd={rememberViewport}
+          defaultViewport={chapter.viewport} fitView={!chapter.viewport} fitViewOptions={{ padding: 0.12, maxZoom: 1 }}
+          nodesConnectable={false} edgesReconnectable={false} connectionMode={ConnectionMode.Loose}
+          deleteKeyCode={null} minZoom={0.05} maxZoom={2} onlyRenderVisibleElements={false}
+          defaultEdgeOptions={{ type: 'default' }}>
+          <Controls showInteractive={false} position="bottom-left" fitViewOptions={{ padding: 0.2, maxZoom: 1 }} />
+          <ViewportPortal><svg className="roadmap-tails" width="1" height="1"><RoadmapTails nodes={chapter.nodes} /></svg></ViewportPortal>
+        </ReactFlow>
+        <button className="pdf-button" onClick={() => void downloadMap()} disabled={exporting || needsLayout || !initialized || !chapter.nodes.length}>
+          {exporting ? <LoaderCircle className="spin" size={16} /> : <Download size={16} />}
+          {exporting ? 'Preparing PDF…' : 'Download PDF'}
+        </button>
+      </main>
+    </div>
     <ExportStage chapter={chapter} edges={displayEdges} stageRef={stageRef} />
   </div>;
 }

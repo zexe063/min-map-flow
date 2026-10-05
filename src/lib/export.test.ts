@@ -1,30 +1,46 @@
 import { describe, expect, it } from 'vitest';
-import { fitMapToA4 } from './export';
+import { diagramPDFSize, pdfFilename } from './pdf-layout';
 
-describe('single-page A4 export fit', () => {
-  it.each([
-    [800, 12_000, 'portrait'],
-    [12_000, 800, 'landscape'],
-    [1_000, 1_000, 'portrait'],
-    [640, 900, 'portrait'],
-    [900, 640, 'landscape'],
-  ] as const)('fits a %s × %s map without cropping or distortion', (width, height, orientation) => {
-    const layout = fitMapToA4(width, height);
-    expect(layout.orientation).toBe(orientation);
-    expect([layout.pageWidth, layout.pageHeight].sort((a, b) => a - b)).toEqual([210, 297]);
-    expect(layout.x).toBeGreaterThanOrEqual(8 - 1e-9);
-    expect(layout.y).toBeGreaterThanOrEqual(8 - 1e-9);
-    expect(layout.x + layout.width).toBeLessThanOrEqual(layout.pageWidth - 8 + 1e-9);
-    expect(layout.y + layout.height).toBeLessThanOrEqual(layout.pageHeight - 8 + 1e-9);
-    expect(layout.width / layout.height).toBeCloseTo(width / height);
-    expect(layout.x * 2 + layout.width).toBeCloseTo(layout.pageWidth);
-    expect(layout.y * 2 + layout.height).toBeCloseTo(layout.pageHeight);
+const MM = 72 / 25.4;
+
+describe('continuous roadmap PDF', () => {
+  it('keeps text at the same size as a map gets longer', () => {
+    const short = diagramPDFSize(1156, 1500);
+    const long = diagramPDFSize(1156, 12_000);
+    expect(short.width).toBeCloseTo(256 * MM);
+    expect(long.width).toBeCloseTo(short.width);
+    expect(long.scale).toBe(short.scale);
+    expect(long.height - 24 * MM).toBeCloseTo((short.height - 24 * MM) * 8);
+    expect(long.height).toBeGreaterThan(297 * MM);
+    expect(long.left).toBeCloseTo(12 * MM);
   });
 
-  it('rejects dimensions that cannot be represented as a printable image', () => {
-    expect(() => fitMapToA4(0, 200)).toThrow('positive, finite');
-    expect(() => fitMapToA4(200, -10)).toThrow('positive, finite');
-    expect(() => fitMapToA4(Infinity, 200)).toThrow('positive, finite');
-    expect(() => fitMapToA4(200, NaN)).toThrow('positive, finite');
+  it('centers a small map without enlarging it', () => {
+    const size = diagramPDFSize(500, 700);
+    expect(size.scale).toBe(0.75);
+    expect(size.width).toBeCloseTo(256 * MM);
+    expect(size.left).toBeCloseTo((size.width - 500 * size.scale) / 2);
+    expect(size.height).toBeCloseTo(700 * 0.75 + 24 * MM);
+  });
+
+  it('uses PDF user units for exceptionally tall maps without shrinking text', () => {
+    const normal = diagramPDFSize(1156, 1500);
+    const huge = diagramPDFSize(1156, 100_000);
+    expect(huge.userUnit).toBeGreaterThan(1);
+    expect(huge.height).toBeCloseTo(14_400);
+    expect(huge.width * huge.userUnit).toBeCloseTo(256 * MM);
+    expect(huge.scale * huge.userUnit).toBeCloseTo(normal.scale);
+  });
+
+  it.each([[0, 20], [20, -1], [Infinity, 20], [20, NaN]])('rejects invalid dimensions %s by %s', (width, height) => {
+    expect(() => diagramPDFSize(width, height)).toThrow('positive, finite');
+  });
+});
+
+describe('PDF filenames', () => {
+  it('uses the chapter title with filesystem-safe characters', () => {
+    expect(pdfFilename('  Trigonometry: Complete / Mastery?  ')).toBe('trigonometry-complete-mastery.pdf');
+    expect(pdfFilename('...')).toBe('roadmap.pdf');
+    expect(pdfFilename('α and θ')).toBe('α-and-θ.pdf');
   });
 });

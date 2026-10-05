@@ -1,0 +1,29 @@
+@font-face {
+  font-family: 'CoFo Sans';
+  src: url('./assets/fonts/cofosans-regular.otf') format('opentype');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+/* These faces are used only for characters absent from the supplied CoFo font. */
+@font-face {
+  font-family: 'Noto Sans';
+  src: url('./assets/fonts/NotoSans-Regular.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: 'Noto Sans Math';
+  src: url('./assets/fonts/NotoSansMath-Regular.ttf') format('truetype');
+  font-style: normal;
+  font-weight: 400;
+  font-display: swap;
+}
+
+:root {
+  --app-font: 'CoFo Sans', 'Noto Sans', 'Noto Sans Math', sans-serif;
+  font-variant-ligatures: none;
+}

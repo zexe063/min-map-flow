@@ -1,5 +1,5 @@
 import { readFile } from 'node:fs/promises';
-import { inflateSync } from 'node:zlib';
+import { PDFArray, PDFDict, PDFDocument, PDFName, PDFRawStream, decodePDFRawStream } from 'pdf-lib';
 import { expect, test, type Locator, type Page } from '@playwright/test';
 import type { Chapter, ChapterLibrary } from '../src/types';
 
@@ -46,41 +46,102 @@ async function dragCard(page: Page, target: Locator) {
   await page.mouse.up();
 }
 
-function pdfStream(pdf: Buffer, objectId: string) {
-  const text = pdf.toString('latin1');
-  const match = new RegExp(`(?:^|\\n)${objectId} 0 obj\\b([\\s\\S]*?)stream\\r?\\n`).exec(text);
-  if (!match) throw new Error(`PDF object ${objectId} does not contain a stream.`);
-  const length = Number(/\/Length\s+(\d+)/.exec(match[1])?.[1]);
-  if (!Number.isFinite(length)) throw new Error('PDF stream has no explicit length.');
-  const start = match.index + match[0].length;
-  const bytes = pdf.subarray(start, start + length);
-  return { dictionary: match[1], bytes: match[1].includes('/FlateDecode') ? inflateSync(bytes) : bytes };
+const MM_PER_POINT = 25.4 / 72;
+const PDF_MARGIN_MM = 12;
+const PDF_WIDTH_MM = 256;
+
+function tallOutline(count = 35) {
+  return ['# A complete tall roadmap', '## Many useful ideas', '### A continuous sequence',
+    ...Array.from({ length: count }, (_, index) => `- ${index === count - 1 ? 'LAST POINT' : `Point ${index + 1}`} with a formula $x_{${index + 1}}^2$`),
+  ].join('\n');
 }
 
-/** Decode PNG row predictors in PDF image streams without an extra dependency. */
-function rgbPixels(bytes: Buffer, width: number, height: number): Buffer {
-  const stride = width * 3;
-  if (bytes.length === stride * height) return bytes;
-  expect(bytes.length).toBe((stride + 1) * height);
-  const output = Buffer.alloc(stride * height);
-  const paeth = (left: number, up: number, corner: number) => {
-    const prediction = left + up - corner;
-    const a = Math.abs(prediction - left), b = Math.abs(prediction - up), c = Math.abs(prediction - corner);
-    return a <= b && a <= c ? left : b <= c ? up : corner;
-  };
-  for (let y = 0; y < height; y += 1) {
-    const filter = bytes[y * (stride + 1)];
-    expect(filter).toBeLessThanOrEqual(4);
-    for (let x = 0; x < stride; x += 1) {
-      const index = y * stride + x;
-      const left = x >= 3 ? output[index - 3] : 0;
-      const up = y > 0 ? output[index - stride] : 0;
-      const corner = y > 0 && x >= 3 ? output[index - stride - 3] : 0;
-      const predictor = filter === 1 ? left : filter === 2 ? up : filter === 3 ? Math.floor((left + up) / 2) : filter === 4 ? paeth(left, up, corner) : 0;
-      output[index] = (bytes[y * (stride + 1) + x + 1] + predictor) & 255;
+async function sourceGeometry(page: Page) {
+  return page.locator('.export-stage-holder .export-stage').evaluate(element => {
+    const stage = element.getBoundingClientRect();
+    return { width: Math.ceil(Math.max(element.scrollWidth, stage.width)), height: Math.ceil(Math.max(element.scrollHeight, stage.height)) };
+  });
+}
+
+/** Read the PDF's own Unicode maps so missing labels cannot pass as vector output. */
+async function inspectPDF(bytes: Buffer) {
+  const pdf = await PDFDocument.load(bytes);
+  const pages = pdf.getPages();
+  const text: string[] = [];
+  const commands: string[] = [];
+  const fontNames = new Set<string>();
+  const fontSizes = new Set<number>();
+  for (const page of pages) {
+    const fonts = page.node.Resources()?.lookup(PDFName.of('Font'), PDFDict);
+    const unicodeMaps = new Map<string, Map<string, string>>();
+    for (const [name, reference] of fonts?.entries() ?? []) {
+      const font = pdf.context.lookup(reference, PDFDict);
+      fontNames.add(font.get(PDFName.of('BaseFont'))?.toString() ?? '');
+      if (!font.has(PDFName.of('ToUnicode'))) continue;
+      const cmap = font.lookup(PDFName.of('ToUnicode'));
+      if (!(cmap instanceof PDFRawStream)) throw new Error('Font has no readable Unicode map.');
+      const source = Buffer.from(decodePDFRawStream(cmap).decode()).toString('latin1');
+      const glyphs = new Map<string, string>();
+      for (const section of source.matchAll(/beginbfchar([\s\S]*?)endbfchar/g)) {
+        for (const entry of section[1].matchAll(/<([\da-f]+)>\s*<([\da-f]+)>/gi)) {
+          const value = (entry[2].match(/.{4}/g) ?? []).map(code => String.fromCharCode(parseInt(code, 16))).join('');
+          glyphs.set(entry[1].toUpperCase(), value);
+        }
+      }
+      unicodeMaps.set(name.asString().slice(1), glyphs);
+    }
+    const contents = page.node.Contents();
+    const streams = contents instanceof PDFArray
+      ? Array.from({ length: contents.size() }, (_, index) => contents.lookup(index, PDFRawStream))
+      : contents instanceof PDFRawStream ? [contents] : [];
+    expect(streams.length).toBeGreaterThan(0);
+    let currentFont = '';
+    for (const stream of streams) {
+      const source = Buffer.from(decodePDFRawStream(stream).decode()).toString('latin1');
+      commands.push(source);
+      for (const token of source.matchAll(/\/([^\s/]+)\s+([\d.]+)\s+Tf\b|<([\da-f]+)>\s*Tj\b/gi)) {
+        if (token[1]) {
+          currentFont = token[1];
+          fontSizes.add(Number(token[2]));
+        } else {
+          const glyphs = unicodeMaps.get(currentFont);
+          expect(glyphs, `Font ${currentFont} must provide selectable Unicode text`).toBeDefined();
+          text.push((token[3].match(/.{4}/g) ?? []).map(code => glyphs!.get(code.toUpperCase()) ?? '\uFFFD').join(''));
+        }
+      }
     }
   }
-  return output;
+  return { pages, text: text.join(''), commands: commands.join('\n'), fontNames: [...fontNames], fontSizes: [...fontSizes].sort((a, b) => a - b) };
+}
+
+async function downloadPDF(page: Page, path: string, filename: string) {
+  // A successful download must never depend on the browser's print workflow.
+  await page.evaluate(() => { window.print = () => { throw new Error('Browser printing must not be used'); }; });
+  const nextDownload = page.waitForEvent('download');
+  await page.getByRole('button', { name: 'Download PDF', exact: true }).click();
+  const download = await nextDownload;
+  expect(download.suggestedFilename()).toBe(filename);
+  expect(await download.failure()).toBeNull();
+  await download.saveAs(path);
+  await expect(page.getByRole('button', { name: 'Download PDF', exact: true })).toBeEnabled();
+  await expect(page.getByRole('alert')).toHaveCount(0);
+  await expect(page.locator('.editor-layout')).toBeVisible();
+  const bytes = await readFile(path);
+  expect(bytes.toString('latin1')).not.toMatch(/\/Subtype\s*\/Image\b/);
+  expect(bytes.toString('latin1')).toMatch(/\/FontFile[23]?\b/);
+  return inspectPDF(bytes);
+}
+
+function expectSourceFitsPDF(result: Awaited<ReturnType<typeof inspectPDF>>, source: { width: number; height: number }) {
+  expect(result.pages).toHaveLength(1);
+  const sheet = result.pages[0].getMediaBox();
+  expect(sheet.width * MM_PER_POINT).toBeCloseTo(PDF_WIDTH_MM, 2);
+  const scale = Math.min(1, (PDF_WIDTH_MM - 2 * PDF_MARGIN_MM) / (source.width * 25.4 / 96));
+  const expectedHeight = source.height * 25.4 / 96 * scale + 2 * PDF_MARGIN_MM;
+  expect(sheet.height * MM_PER_POINT).toBeCloseTo(expectedHeight, 1);
+  expect(result.text).not.toContain('\uFFFD');
+  expect(result.commands).toMatch(/\bTj\b/);
+  expect(result.commands).toMatch(/\bc\b/);
 }
 
 test.beforeEach(async ({ page }) => {
@@ -90,9 +151,9 @@ test.beforeEach(async ({ page }) => {
   await expect.poll(async () => (await storedChapter(page))?.viewport).toBeTruthy();
 });
 
-test('starts with only the text editor, map controls, and A4 PDF action', async ({ page }) => {
+test('starts with only the text editor, map controls, and PDF download', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Generate Roadmap', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Download A4 PDF', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Download PDF', exact: true })).toBeVisible();
   await expect(page.getByRole('textbox')).toHaveCount(1);
   await expect(page.locator('.tool-rail, .topic-inspector, .library-modal, .studio-tag, .panel-tabs')).toHaveCount(0);
   await expect(page.getByRole('button', { name: /new chapter|bulk add|PNG|AI|undo|redo/i })).toHaveCount(0);
@@ -184,89 +245,94 @@ test('keeps other locally saved chapters intact when updating the active map', a
   await expect(page.getByRole('button', { name: /chapter library|my chapters|new chapter/i })).toHaveCount(0);
 });
 
-test('places the complete tall map, including the last card, on exactly one A4 PDF page', async ({ page }, testInfo) => {
-  test.setTimeout(90_000);
-  const points = Array.from({ length: 35 }, (_, index) => `- ${index === 34 ? 'LAST POINT' : `Point ${index + 1}`} with a formula $x_{${index + 1}}^2$`);
-  const outline = ['# A complete tall roadmap', '## Many useful ideas', '### A continuous sequence', ...points].join('\n');
-  await generate(page, outline, 38);
-  await expect(page.locator('[data-export-node]')).toHaveCount(38);
-  const geometry = await page.evaluate(() => {
-    const stage = document.querySelector('.export-stage')!.getBoundingClientRect();
-    const viewport = document.querySelector('.react-flow')!.getBoundingClientRect();
-    const boxes = Array.from(document.querySelectorAll('[data-export-node]')).map((node) => {
-      const box = node.getBoundingClientRect();
-      return { x: box.left - stage.left, y: box.top - stage.top, width: box.width, height: box.height };
-    });
-    const terminals = Array.from(document.querySelectorAll('.export-stage [data-roadmap-terminal]')).map((line) => {
-      const box = line.getBoundingClientRect();
-      return { x: box.left - stage.left, y: box.top - stage.top, width: box.width, height: box.height };
-    });
-    return { width: stage.width, height: stage.height, viewportHeight: viewport.height, boxes, terminals };
-  });
-  expect(geometry.height).toBeGreaterThan(geometry.viewportHeight);
-  expect(geometry.terminals).toHaveLength(2);
-  for (const box of [...geometry.boxes, ...geometry.terminals]) {
-    expect(box.x).toBeGreaterThanOrEqual(0);
-    expect(box.y).toBeGreaterThanOrEqual(0);
-    expect(box.x + box.width).toBeLessThanOrEqual(geometry.width + 1);
-    expect(box.y + box.height).toBeLessThanOrEqual(geometry.height + 1);
-  }
-  await expect(page.locator('[data-export-node]').last()).toContainText('LAST POINT');
-  const downloadPromise = page.waitForEvent('download');
-  await page.getByRole('button', { name: 'Download A4 PDF', exact: true }).click();
-  const download = await downloadPromise;
-  const path = (await download.path())!;
-  const pdf = await readFile(path);
-  const text = pdf.toString('latin1');
-  expect(download.suggestedFilename()).toMatch(/\.pdf$/);
-  expect(text.startsWith('%PDF-')).toBe(true);
-  expect(text).toContain('%%EOF');
-  expect((text.match(/\/Type\s*\/Page\b/g) ?? []).length).toBe(1);
-  const mediaBox = /\/MediaBox\s*\[\s*([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s*\]/.exec(text)!;
-  expect(mediaBox).not.toBeNull();
-  const pageWidth = Number(mediaBox[3]), pageHeight = Number(mediaBox[4]);
-  const sortedSize = [pageWidth, pageHeight].sort((a, b) => a - b);
-  expect(sortedSize[0]).toBeCloseTo(595.28, 1);
-  expect(sortedSize[1]).toBeCloseTo(841.89, 1);
-  const contentsId = /\/Contents\s+(\d+)\s+0\s+R/.exec(text)![1];
-  const commands = pdfStream(pdf, contentsId).bytes.toString('latin1');
-  const placement = /([\d.]+)\s+0\s+0\s+([\d.]+)\s+([\d.]+)\s+([\d.]+)\s+cm/.exec(commands)!;
-  expect(placement).not.toBeNull();
-  const [, widthText, heightText, xText, yText] = placement;
-  const width = Number(widthText), height = Number(heightText), x = Number(xText), y = Number(yText);
-  expect(x).toBeGreaterThanOrEqual(0);
-  expect(y).toBeGreaterThanOrEqual(0);
-  expect(x + width).toBeLessThanOrEqual(pageWidth + 0.01);
-  expect(y + height).toBeLessThanOrEqual(pageHeight + 0.01);
-  expect(width / height).toBeCloseTo(geometry.width / geometry.height, 3);
+test('downloads a complete tall vector roadmap directly on a readable continuous sheet', async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  await generate(page, tallOutline(), 38);
+  await expect(page.getByLabel('PDF layout', { exact: true })).toHaveCount(0);
+  const source = await sourceGeometry(page);
+  const path = testInfo.outputPath('complete-tall-roadmap.pdf');
+  const result = await downloadPDF(page, path, 'a-complete-tall-roadmap.pdf');
+  expectSourceFitsPDF(result, source);
+  expect(result.pages[0].getHeight() * MM_PER_POINT).toBeGreaterThan(297);
+  // Positioned glyphs may express a space as a gap instead of an encoded character.
+  const compact = result.text.replace(/\s+/g, '');
+  expect(compact).toContain('Acompletetallroadmap');
+  expect(compact).toContain('Acontinuoussequence');
+  expect(compact).toContain('LASTPOINT');
+  for (let index = 1; index < 35; index += 1) expect(compact).toContain(`Point${index}withaformula`);
+  expect(result.fontNames.some(name => /Balsamiq/i.test(name))).toBe(true);
+  expect(result.fontNames.some(name => /KaTeX/i.test(name))).toBe(true);
+  await testInfo.attach('complete-tall-roadmap.pdf', { path, contentType: 'application/pdf' });
+});
 
-  const imageObjects = [...text.matchAll(/(?:^|\n)(\d+) 0 obj\s*<<((?:(?!endobj)[\s\S])*?\/Subtype\s*\/Image(?:(?!endobj)[\s\S])*?)stream\r?\n/g)];
-  const rgbImage = imageObjects.find((match) => /\/ColorSpace\s*\/DeviceRGB/.test(match[2]));
-  expect(rgbImage).toBeTruthy();
-  const imageWidth = Number(/\/Width\s+(\d+)/.exec(rgbImage![2])![1]);
-  const imageHeight = Number(/\/Height\s+(\d+)/.exec(rgbImage![2])![1]);
-  expect(imageWidth / imageHeight).toBeCloseTo(geometry.width / geometry.height, 3);
-  const pixels = rgbPixels(pdfStream(pdf, rgbImage![1]).bytes, imageWidth, imageHeight);
-  const last = geometry.boxes.at(-1)!;
-  const sampleX = Math.floor((last.x + last.width * 0.2) / geometry.width * imageWidth);
-  const sampleY = Math.floor((last.y + last.height * 0.2) / geometry.height * imageHeight);
-  const pixelIndex = (sampleY * imageWidth + sampleX) * 3;
-  // Sample inside the final yellow card, beyond the visible map viewport.
-  expect(pixels[pixelIndex]).toBeGreaterThan(220);
-  expect(pixels[pixelIndex + 1]).toBeGreaterThan(170);
-  expect(pixels[pixelIndex + 2]).toBeLessThan(210);
-  for (const terminal of geometry.terminals) {
-    let bluePixels = 0;
-    const centerX = terminal.x / geometry.width * imageWidth;
-    const fromY = Math.ceil(terminal.y / geometry.height * imageHeight);
-    const toY = Math.floor((terminal.y + terminal.height) / geometry.height * imageHeight);
-    for (let y = fromY; y < toY; y += 1) {
-      for (let x = Math.floor(centerX - 3); x <= Math.ceil(centerX + 3); x += 1) {
-        const index = (y * imageWidth + x) * 3;
-        if (pixels[index + 2] > 130 && pixels[index + 2] > pixels[index] + 50) bluePixels += 1;
-      }
-    }
-    expect(bluePixels).toBeGreaterThan(0);
+test('grows the downloaded page as the map gets taller without shrinking its text', async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const results: Awaited<ReturnType<typeof inspectPDF>>[] = [];
+  const widths: number[] = [];
+  for (const count of [35, 70]) {
+    await generate(page, tallOutline(count), count + 3);
+    const source = await sourceGeometry(page);
+    widths.push(source.width);
+    const path = testInfo.outputPath(`roadmap-${count}-points.pdf`);
+    const result = await downloadPDF(page, path, 'a-complete-tall-roadmap.pdf');
+    expectSourceFitsPDF(result, source);
+    expect(result.text.replace(/\s+/g, '')).toContain('LASTPOINT');
+    results.push(result);
   }
-  await testInfo.attach('complete-one-page-a4.pdf', { path, contentType: 'application/pdf' });
+  expect(widths[1]).toBe(widths[0]);
+  expect(results[1].pages[0].getHeight()).toBeGreaterThan(results[0].pages[0].getHeight() * 1.5);
+  expect(results[1].fontSizes).toEqual(results[0].fontSizes);
+});
+
+test('downloads wrapped labels, fractions, roots, and Greek symbols as vector text', async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  const wrapped = 'A longer explanation of acceleration and balanced forces that wraps across several lines while retaining every word in the exported roadmap';
+  const literalNotation = 'sin⁻¹(x), x⁻², 10⁻³, θ, π, aₙ, x₁, H₂O';
+  const outline = String.raw`# Formulas and Greek symbols
+## Mathematical notation
+### Motion and geometry
+- Newton's equation $F = ma$
+- Acceleration
+$$a = \frac{F}{m}$$
+- Root $\sqrt{x^2 + y^2}$
+- Greek symbols θ and π stay readable
+- Literal notation ${literalNotation}
+- ${wrapped}`;
+  await generate(page, outline, 9);
+  const source = await sourceGeometry(page);
+  const path = testInfo.outputPath('formulas-and-greek-symbols.pdf');
+  const result = await downloadPDF(page, path, 'formulas-and-greek-symbols.pdf');
+  expectSourceFitsPDF(result, source);
+  const compact = result.text.replace(/\s+/g, '');
+  expect(compact).toContain(wrapped.replace(/\s+/g, ''));
+  expect(compact).toContain("Newton'sequationF=ma");
+  expect(compact).toContain('Greek symbols θ and π stay readable'.replace(/\s+/g, ''));
+  expect(compact).toContain(literalNotation.replace(/\s+/g, ''));
+  expect(result.text).toContain('Acceleration');
+  expect(result.text).toContain('Root');
+  expect(result.fontNames.filter(name => /KaTeX/i.test(name)).length).toBeGreaterThanOrEqual(2);
+  await testInfo.attach('formulas-and-greek-symbols.pdf', { path, contentType: 'application/pdf' });
+});
+
+test('reports a failed font download and allows PDF export to be retried', async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  await generate(page);
+  let blockedFonts = 0;
+  let blockFonts = true;
+  await page.route(/\.(?:woff2?|ttf|otf)(?:\?|$)/i, async route => {
+    if (blockFonts && route.request().resourceType() === 'fetch') {
+      blockedFonts += 1;
+      await route.abort('failed');
+    } else await route.continue();
+  });
+  await page.getByRole('button', { name: 'Download PDF', exact: true }).click();
+  await expect(page.getByRole('alert')).toContainText(/font|download|export|fetch/i);
+  expect(blockedFonts).toBeGreaterThan(0);
+  await expect(page.getByRole('button', { name: 'Download PDF', exact: true })).toBeEnabled();
+  await expect(page.locator('.editor-layout')).toBeVisible();
+  blockFonts = false;
+  const path = testInfo.outputPath('retry-forces-and-motion.pdf');
+  const result = await downloadPDF(page, path, 'forces-and-motion.pdf');
+  expect(result.pages).toHaveLength(1);
+  expect(result.text.replace(/\s+/g, '')).toContain('Forcesandmotion');
 });

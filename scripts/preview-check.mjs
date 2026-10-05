@@ -9,7 +9,7 @@ try {
   await page.goto('http://127.0.0.1:5173/');
   await expect(page.getByLabel('Roadmap text', { exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Generate Roadmap', exact: true })).toBeVisible();
-  await expect(page.getByRole('button', { name: 'Download A4 PDF', exact: true })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Download PDF', exact: true })).toBeVisible();
   await page.locator('.react-flow__node').first().waitFor();
   await page.evaluate(() => document.fonts.ready);
   await page.waitForTimeout(1500);

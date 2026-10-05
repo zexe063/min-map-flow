@@ -10,7 +10,8 @@ const handlePosition: Record<string, Position> = { top: Position.Top, right: Pos
 export default function ExportStage({ chapter, edges, stageRef }: {
   chapter: Chapter; edges: MapEdge[]; stageRef: RefObject<HTMLDivElement | null>;
 }) {
-  const padding = 48;
+  // The PDF supplies the margins; retain only room for the line caps.
+  const padding = 8;
   const tails = roadmapTails(chapter.nodes);
   const left = chapter.nodes.length ? Math.min(...chapter.nodes.map(node => node.position.x)) : 0;
   const top = chapter.nodes.length ? Math.min(...chapter.nodes.map(node => node.position.y), ...tails.map(line => line.y1)) : 0;

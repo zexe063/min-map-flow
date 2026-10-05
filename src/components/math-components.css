@@ -10,7 +10,14 @@
 .math-formula-fit { display: inline-block; max-width: 100%; vertical-align: middle; }
 .math-formula-content { display: inline-block; width: max-content; transform-origin: top left; white-space: nowrap; vertical-align: top; }
 .math-formula--display { display: block; margin: 8px 0; text-align: center; }
-.math-formula .katex { font-size: 1.06em; }
+.math-formula .katex { font-family: var(--app-font); font-size: 1em; font-variant-ligatures: none; }
+/* Match ordinary mathematical letters/numbers to labels. Keep KaTeX's
+   explicitly styled alphabets, sized operators, and delimiter pieces intact. */
+.math-formula .katex :is(.mathnormal, .mathrm, .textrm, .mainrm, .mathsf, .textsf) {
+  font-family: var(--app-font);
+  font-style: normal;
+}
+.math-formula .katex .accent-body { font-family: KaTeX_Main, serif; }
 .math-formula .katex-display { margin: 0; }
 .math-formula--error { color: #a33939; }
 .math-formula--error .katex-error { color: #a33939 !important; }
@@ -29,7 +36,7 @@
   border-radius: 5px;
   background: #fcff00;
   color: #000;
-  font-family: 'Balsamiq Sans', sans-serif;
+  font-family: var(--app-font);
   font-size: 17px;
   font-weight: 400;
   line-height: 1.4;
