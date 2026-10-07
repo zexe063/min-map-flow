@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import {
   ReactFlow, ReactFlowProvider, Controls, ConnectionMode, applyNodeChanges,
   useNodesInitialized, useReactFlow, ViewportPortal, type NodeChange, type Viewport,
@@ -15,6 +15,14 @@ import type { Chapter, ChapterLibrary, MapNode } from './types';
 
 const nodeTypes = { chapter: ChapterNode };
 const messageOf = (error: unknown) => error instanceof Error ? error.message : 'Please try again.';
+const LANGUAGE_STORAGE_KEY = 'chaptermap.language';
+const LAYOUT_VERSION = 5;
+type TextLanguage = 'en' | 'hi';
+
+function initialLanguage(): TextLanguage {
+  try { return localStorage.getItem(LANGUAGE_STORAGE_KEY) === 'hi' ? 'hi' : 'en'; }
+  catch { return 'en'; }
+}
 
 function initialState(): { library: ChapterLibrary; storageError: string } {
   let storageError = '';
@@ -34,6 +42,7 @@ export default function App() {
 }
 
 function TextToRoadmap() {
+  const [language, setLanguage] = useState(initialLanguage);
   const [initial] = useState(initialState);
   const [library, setLibrary] = useState(initial.library);
   const chapter = library.chapters.find(item => item.id === library.activeId)!;
@@ -42,7 +51,7 @@ function TextToRoadmap() {
   const [saved, setSaved] = useState(false);
   const [exporting, setExporting] = useState(false);
   const [generation, setGeneration] = useState(0);
-  const [needsLayout, setNeedsLayout] = useState(chapter.layoutVersion !== 3);
+  const [needsLayout, setNeedsLayout] = useState(chapter.layoutVersion !== LAYOUT_VERSION);
   const canvasRef = useRef<HTMLElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const currentRef = useRef(chapter);
@@ -52,6 +61,18 @@ function TextToRoadmap() {
   const draft = chapter.draftOutline ?? chapter.outline;
   const dirty = chapter.draftOutline !== undefined && chapter.draftOutline !== chapter.outline;
   const displayEdges = useMemo(() => roadmapEdges(chapter.nodes, chapter.edges), [chapter.nodes, chapter.edges]);
+
+  useLayoutEffect(() => {
+    document.documentElement.dataset.language = language;
+    try { localStorage.setItem(LANGUAGE_STORAGE_KEY, language); }
+    catch { /* The switch still works when browser storage is unavailable. */ }
+  }, [language]);
+
+  const changeLanguage = (next: TextLanguage) => {
+    if (next === language) return;
+    setLanguage(next);
+    setNeedsLayout(true);
+  };
 
   const updateChapter = useCallback((update: (previous: Chapter) => Chapter) => {
     setLibrary(previous => ({
@@ -86,20 +107,26 @@ function TextToRoadmap() {
     if (!initialized || !needsLayout) return;
     let cancelled = false;
     let timer: number | undefined;
-    void document.fonts.ready.then(() => {
+    const family = language === 'hi' ? 'Noto Sans Devanagari' : 'Balsamiq Sans';
+    const weight = language === 'hi' ? 700 : 400;
+    void document.fonts.load(`${weight} 17px "${family}"`).then(() => document.fonts.ready).then(() => {
       if (cancelled) return;
       timer = window.setTimeout(() => {
         if (cancelled) return;
         const live = new Map(getNodes().map(node => [node.id, node]));
         const current = currentRef.current;
         const nodes = layoutNodes(current.nodes.map(node => ({ ...node, measured: live.get(node.id)?.measured ?? node.measured })), current.edges);
-        updateChapter(previous => ({ ...previous, nodes, layoutVersion: 3 }));
+        updateChapter(previous => ({ ...previous, nodes, layoutVersion: LAYOUT_VERSION }));
         setNeedsLayout(false);
         showStart(nodes);
       }, 120);
+    }).catch(() => {
+      if (cancelled) return;
+      setError('The selected font could not load. Please refresh to try again.');
+      setNeedsLayout(false);
     });
     return () => { cancelled = true; if (timer !== undefined) window.clearTimeout(timer); };
-  }, [initialized, needsLayout, generation, getNodes, showStart, updateChapter]);
+  }, [initialized, needsLayout, generation, language, getNodes, showStart, updateChapter]);
 
   const onNodesChange = useCallback((changes: NodeChange<MapNode>[]) => {
     // Dimensions and manual positions never replace text waiting to be generated.
@@ -114,7 +141,7 @@ function TextToRoadmap() {
       if (graph.nodes.some(node => node.data.label.length > 12_000)) throw new Error('A single card is too long. Split it into smaller points.');
       updateChapter(previous => ({
         ...previous, title: graph.title, outline: draft, draftOutline: undefined,
-        nodes: graph.nodes, edges: graph.edges, viewport: undefined, layoutVersion: 3,
+        nodes: graph.nodes, edges: graph.edges, viewport: undefined, layoutVersion: LAYOUT_VERSION,
       }));
       setError(''); setNeedsLayout(true); setGeneration(value => value + 1);
     } catch (failure) { setError(messageOf(failure)); }
@@ -139,6 +166,15 @@ function TextToRoadmap() {
       <aside className="text-sidebar" aria-label="Text to roadmap">
         <div className="sidebar-tab"><AlignLeft size={19} strokeWidth={1.8} />Text to roadmap</div>
         <section className="syntax-panel" aria-labelledby="text-heading">
+          <div className="language-toolbar">
+            <span>Text language</span>
+            <div className="language-switch" role="group" aria-label="Text language">
+              <button type="button" lang="en" aria-pressed={language === 'en'} disabled={exporting}
+                onClick={() => changeLanguage('en')}>English</button>
+              <button type="button" lang="hi" aria-pressed={language === 'hi'} disabled={exporting}
+                onClick={() => changeLanguage('hi')}>हिन्दी</button>
+            </div>
+          </div>
           <h1 id="text-heading">Generate Roadmap from Text</h1>
           <p>Write a single topic on each line. Starting characters decide the type of each node.</p>
           <div className="syntax-row"><code className="marker-dark"># Roadmap Title</code><span>The title</span></div>
@@ -148,7 +184,7 @@ function TextToRoadmap() {
           <p className="formula-hint">Math: <code>$x^2$</code> or <code>{'$$\\frac{a}{b}$$'}</code></p>
           <label htmlFor="roadmap-text">Start writing below:</label>
         </section>
-        <textarea id="roadmap-text" aria-label="Roadmap text" className="roadmap-input"
+        <textarea id="roadmap-text" aria-label="Roadmap text" className="roadmap-input" lang={language}
           value={draft} onChange={event => { updateChapter(previous => ({ ...previous, draftOutline: event.target.value })); setError(''); }}
           placeholder={'# Roadmap Title\n## Parent Label\n### Parent Topic\n- Subtopic\n- Formula: $E = mc^2$'}
           spellCheck={false} maxLength={150_000} />
@@ -158,7 +194,7 @@ function TextToRoadmap() {
           <span className="save-state" role="status">{dirty ? 'Text changed — generate to update the map' : saved ? <><Check size={12} />Saved in this browser</> : 'Saving…'}</span>
         </div>
       </aside>
-      <main className="diagram-canvas" ref={canvasRef} aria-label="Roadmap diagram">
+      <main className="diagram-canvas" ref={canvasRef} aria-label="Roadmap diagram" lang={language}>
         <ReactFlow<MapNode> key={`${chapter.id}-${generation}`}
           nodes={chapter.nodes} edges={displayEdges} nodeTypes={nodeTypes}
           onNodesChange={onNodesChange} onMoveEnd={rememberViewport}
@@ -175,6 +211,6 @@ function TextToRoadmap() {
         </button>
       </main>
     </div>
-    <ExportStage chapter={chapter} edges={displayEdges} stageRef={stageRef} />
+    <ExportStage chapter={chapter} edges={displayEdges} stageRef={stageRef} language={language} />
   </div>;
 }

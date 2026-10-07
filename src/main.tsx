@@ -2,6 +2,8 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import '@xyflow/react/dist/style.css';
 import 'katex/dist/katex.min.css';
+import '@fontsource/balsamiq-sans';
+import '@fontsource/balsamiq-sans/700.css';
 import './fonts.css';
 import './styles.css';
 import App from './App';

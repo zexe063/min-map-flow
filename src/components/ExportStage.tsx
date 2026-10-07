@@ -7,8 +7,8 @@ import type { Chapter, MapEdge, MapNode } from '../types';
 
 const handlePosition: Record<string, Position> = { top: Position.Top, right: Position.Right, bottom: Position.Bottom, left: Position.Left };
 
-export default function ExportStage({ chapter, edges, stageRef }: {
-  chapter: Chapter; edges: MapEdge[]; stageRef: RefObject<HTMLDivElement | null>;
+export default function ExportStage({ chapter, edges, stageRef, language }: {
+  chapter: Chapter; edges: MapEdge[]; stageRef: RefObject<HTMLDivElement | null>; language: 'en' | 'hi';
 }) {
   // The PDF supplies the margins; retain only room for the line caps.
   const padding = 8;
@@ -31,7 +31,7 @@ export default function ExportStage({ chapter, edges, stageRef }: {
   };
 
   return <div className="export-stage-holder" aria-hidden="true">
-    <div ref={stageRef} className="export-stage" style={{ width, height }}>
+    <div ref={stageRef} className="export-stage" lang={language} style={{ width, height }}>
       <svg width={width} height={height} className="export-edges" xmlns="http://www.w3.org/2000/svg">
         <g transform={`translate(${offsetX}, ${offsetY})`}><RoadmapTails nodes={chapter.nodes} /></g>
         {edges.map(edge => {

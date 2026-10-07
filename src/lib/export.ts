@@ -12,6 +12,12 @@ export async function createDiagramPDF(element: HTMLElement, title: string): Pro
   holder.style.cssText = 'position:fixed;left:-50000px;top:0;pointer-events:none;';
   holder.setAttribute('aria-hidden', 'true');
   const snapshot = element.cloneNode(true) as HTMLElement;
+  const style = getComputedStyle(element);
+  snapshot.style.setProperty('--app-font', style.getPropertyValue('--app-font'));
+  snapshot.style.setProperty('--app-font-weight', style.getPropertyValue('--app-font-weight'));
+  snapshot.style.fontFamily = style.fontFamily;
+  snapshot.style.fontWeight = style.fontWeight;
+  snapshot.style.fontVariantLigatures = style.fontVariantLigatures;
   holder.append(snapshot);
   document.body.append(holder);
   try {

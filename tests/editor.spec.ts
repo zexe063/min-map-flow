@@ -4,6 +4,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import type { Chapter, ChapterLibrary } from '../src/types';
 
 const STORAGE_KEY = 'chaptermap.library.v1';
+const LANGUAGE_STORAGE_KEY = 'chaptermap.language';
 const OUTLINE = String.raw`# Forces and motion
 ## Newton's laws
 ### Force and acceleration
@@ -12,6 +13,15 @@ const OUTLINE = String.raw`# Forces and motion
 $$a = \frac{F}{m}$$
 ### Balanced forces
 - Equilibrium $\sum F = 0$`;
+const HINDI_OUTLINE = String.raw`# Hindi and English
+## विज्ञान और गति
+### शिक्षा, शक्ति और त्रिकोणमिति
+- किसी वस्तु का बल $F = ma$ और त्वरण
+- English words stay readable in a longer explanation of acceleration and balanced forces that wraps across several lines without losing any part of the sentence
+- क्षेत्रफल
+$$A = \frac{1}{2}bh$$
+### अंतिम विचार
+- विद्यार्थी का प्रश्न: क्षितिज और दृष्टि`;
 
 async function storedLibrary(page: Page): Promise<ChapterLibrary | null> {
   return page.evaluate((key) => {
@@ -35,6 +45,71 @@ async function generate(page: Page, outline = OUTLINE, count = 7) {
   await expect(page.locator('.react-flow__node')).toHaveCount(count);
   await expect.poll(async () => (await storedChapter(page))?.outline).toBe(outline);
   await expect.poll(async () => (await storedChapter(page))?.viewport).toBeTruthy();
+  await expect(page.getByRole('button', { name: 'Download PDF', exact: true })).toBeEnabled();
+}
+
+async function expectLanguage(page: Page, language: 'en' | 'hi') {
+  const group = page.getByRole('group', { name: 'Text language', exact: true });
+  await expect(group.getByRole('button', { name: 'English', exact: true })).toHaveAttribute('aria-pressed', String(language === 'en'));
+  await expect(group.getByRole('button', { name: 'हिन्दी', exact: true })).toHaveAttribute('aria-pressed', String(language === 'hi'));
+  await expect(page.locator('html')).toHaveAttribute('data-language', language);
+  for (const target of [page.getByLabel('Roadmap text', { exact: true }), page.locator('.diagram-canvas'), page.locator('.export-stage')]) {
+    await expect(target).toHaveAttribute('lang', language);
+  }
+  await page.evaluate(() => document.fonts.ready);
+  const family = language === 'en' ? 'Balsamiq Sans' : 'Noto Sans Devanagari';
+  const weight = language === 'en' ? '400' : '700';
+  const styles = await page.locator('.roadmap-input, .chapter-node-label').evaluateAll(elements =>
+    elements.map(element => {
+      const style = getComputedStyle(element);
+      return { family: style.fontFamily.split(',')[0].replace(/["']/g, '').trim(), weight: style.fontWeight };
+    }));
+  expect(styles.length).toBeGreaterThan(1);
+  expect(styles.every(style => style.family === family && style.weight === weight)).toBe(true);
+  expect(await page.evaluate(({ family, weight }) => document.fonts.check(`${weight} 17px "${family}"`), { family, weight })).toBe(true);
+  await expect.poll(() => page.evaluate(key => localStorage.getItem(key), LANGUAGE_STORAGE_KEY)).toBe(language);
+  await expect(page.getByRole('button', { name: 'Download PDF', exact: true })).toBeEnabled();
+}
+
+async function expectLabelsFit(page: Page) {
+  const problems = await page.locator('.diagram-canvas, .export-stage').evaluateAll(stages => {
+    const errors: string[] = [];
+    for (const stage of stages) {
+      const cards = Array.from(stage.querySelectorAll<HTMLElement>('.chapter-node'));
+      const boxes = cards.map(card => card.getBoundingClientRect());
+      for (const [index, card] of cards.entries()) {
+        const box = boxes[index];
+        const label = card.querySelector('.chapter-node-label')!;
+        const walker = document.createTreeWalker(label, NodeFilter.SHOW_TEXT);
+        while (walker.nextNode()) {
+          const node = walker.currentNode;
+          if (!node.textContent?.trim() || node.parentElement?.closest('.katex-mathml, svg')) continue;
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          for (const text of range.getClientRects()) {
+            if (text.width <= 0 || text.height <= 0) continue;
+            if (text.left < box.left - 2 || text.right > box.right + 2 || text.top < box.top - 2 || text.bottom > box.bottom + 2) {
+              errors.push(`${stage.className}: clipped text ${node.textContent}`);
+            }
+          }
+        }
+        for (const other of boxes.slice(index + 1)) {
+          if (Math.min(box.right, other.right) - Math.max(box.left, other.left) > 1
+            && Math.min(box.bottom, other.bottom) - Math.max(box.top, other.top) > 1) {
+            errors.push(`${stage.className}: overlapping card ${index}`);
+          }
+        }
+        if (stage.classList.contains('export-stage')) {
+          const bounds = stage.getBoundingClientRect();
+          if (box.left < bounds.left - 1 || box.right > bounds.right + 1 || box.top < bounds.top - 1 || box.bottom > bounds.bottom + 1) {
+            errors.push(`Export stage clips card ${index}`);
+          }
+        }
+      }
+    }
+    return errors;
+  });
+  expect(problems).toEqual([]);
 }
 
 async function dragCard(page: Page, target: Locator) {
@@ -68,6 +143,8 @@ async function inspectPDF(bytes: Buffer) {
   const pdf = await PDFDocument.load(bytes);
   const pages = pdf.getPages();
   const text: string[] = [];
+  const actualText: string[] = [];
+  const rawText: string[] = [];
   const commands: string[] = [];
   const fontNames = new Set<string>();
   const fontSizes = new Set<number>();
@@ -96,22 +173,35 @@ async function inspectPDF(bytes: Buffer) {
       : contents instanceof PDFRawStream ? [contents] : [];
     expect(streams.length).toBeGreaterThan(0);
     let currentFont = '';
+    const markedContent: boolean[] = [];
     for (const stream of streams) {
       const source = Buffer.from(decodePDFRawStream(stream).decode()).toString('latin1');
       commands.push(source);
-      for (const token of source.matchAll(/\/([^\s/]+)\s+([\d.]+)\s+Tf\b|<([\da-f]+)>\s*Tj\b/gi)) {
+      for (const token of source.matchAll(/\/ActualText\s*<([\da-f]+)>\s*>>\s*BDC\b|\b(BMC|BDC|EMC)\b|\/([^\s/]+)\s+([\d.]+)\s+Tf\b|<([\da-f]+)>\s*Tj\b/gi)) {
         if (token[1]) {
-          currentFont = token[1];
-          fontSizes.add(Number(token[2]));
+          // Indic glyph order differs from logical Unicode order. ActualText
+          // supplies the accessible/selectable text for the shaped glyph run.
+          const value = (token[1].match(/.{4}/g) ?? []).map(code => String.fromCharCode(parseInt(code, 16))).join('').replace(/^\uFEFF/, '');
+          actualText.push(value);
+          if (!markedContent.includes(true)) text.push(value);
+          markedContent.push(true);
+        } else if (token[2]) {
+          if (token[2] === 'EMC') markedContent.pop();
+          else markedContent.push(false);
+        } else if (token[3]) {
+          currentFont = token[3];
+          fontSizes.add(Number(token[4]));
         } else {
           const glyphs = unicodeMaps.get(currentFont);
           expect(glyphs, `Font ${currentFont} must provide selectable Unicode text`).toBeDefined();
-          text.push((token[3].match(/.{4}/g) ?? []).map(code => glyphs!.get(code.toUpperCase()) ?? '\uFFFD').join(''));
+          const value = (token[5].match(/.{4}/g) ?? []).map(code => glyphs!.get(code.toUpperCase()) ?? '\uFFFD').join('');
+          rawText.push(value);
+          if (!markedContent.includes(true)) text.push(value);
         }
       }
     }
   }
-  return { pages, text: text.join(''), commands: commands.join('\n'), fontNames: [...fontNames], fontSizes: [...fontSizes].sort((a, b) => a - b) };
+  return { pages, text: text.join(''), actualText, rawText: rawText.join(''), commands: commands.join('\n'), fontNames: [...fontNames], fontSizes: [...fontSizes].sort((a, b) => a - b) };
 }
 
 async function downloadPDF(page: Page, path: string, filename: string) {
@@ -151,7 +241,7 @@ test.beforeEach(async ({ page }) => {
   await expect.poll(async () => (await storedChapter(page))?.viewport).toBeTruthy();
 });
 
-test('starts with only the text editor, map controls, and PDF download', async ({ page }) => {
+test('starts with only the text editor, map controls, and PDF download', async ({ page }, testInfo) => {
   await expect(page.getByRole('button', { name: 'Generate Roadmap', exact: true })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Download PDF', exact: true })).toBeVisible();
   await expect(page.getByRole('textbox')).toHaveCount(1);
@@ -162,6 +252,54 @@ test('starts with only the text editor, map controls, and PDF download', async (
   await expect(page.locator('.react-flow__node')).toHaveCount(chapter.nodes.length);
   await expect(page.locator('.react-flow__node .katex').first()).toBeAttached();
   await expect(page.locator('.react-flow__node .katex math').first()).toBeAttached();
+  await expectLanguage(page, 'en');
+  const screenshot = testInfo.outputPath('language-english-desktop.png');
+  await page.screenshot({ path: screenshot, fullPage: true });
+  await testInfo.attach('English desktop', { path: screenshot, contentType: 'image/png' });
+});
+
+test('switches language fonts, reflows cards, and preserves the draft after reload', async ({ page }, testInfo) => {
+  await generate(page, HINDI_OUTLINE, 8);
+  await expectLanguage(page, 'en');
+  const initialPosition = (await storedChapter(page))!.nodes.find(node => node.id === 'node-3')!.position;
+  await dragCard(page, page.locator('.react-flow__node[data-id="node-3"]'));
+  await expect.poll(async () => (await storedChapter(page))?.nodes.find(node => node.id === 'node-3')?.position).not.toEqual(initialPosition);
+  const before = (await storedChapter(page))!;
+  const draft = String.raw`# अगला प्रारूप
+## Keep this draft exactly
+### नया प्रश्न $\sqrt{x^2 + y^2}$
+- विद्यार्थी और English text
+`;
+  await page.getByLabel('Roadmap text', { exact: true }).fill(draft);
+  await page.getByRole('group', { name: 'Text language', exact: true }).getByRole('button', { name: 'हिन्दी', exact: true }).click();
+  await expectLanguage(page, 'hi');
+  // Reflow is observable even when both fonts happen to wrap a label identically.
+  await expect.poll(async () => (await storedChapter(page))?.nodes.map(node => node.position)).not.toEqual(before.nodes.map(node => node.position));
+  await expect.poll(async () => (await storedChapter(page))?.draftOutline).toBe(draft);
+  await expect(page.getByLabel('Roadmap text', { exact: true })).toHaveValue(draft);
+  expect((await storedChapter(page))!.outline).toBe(HINDI_OUTLINE);
+  expect((await storedChapter(page))!.nodes.map(node => node.data)).toEqual(before.nodes.map(node => node.data));
+  await expectLabelsFit(page);
+
+  await page.reload();
+  await expectLanguage(page, 'hi');
+  await expect(page.getByLabel('Roadmap text', { exact: true })).toHaveValue(draft);
+  expect((await storedChapter(page))!.outline).toBe(HINDI_OUTLINE);
+  expect((await storedChapter(page))!.nodes.map(node => node.data)).toEqual(before.nodes.map(node => node.data));
+  await expectLabelsFit(page);
+  const desktop = testInfo.outputPath('language-hindi-desktop.png');
+  await page.screenshot({ path: desktop, fullPage: true });
+  await testInfo.attach('Hindi desktop', { path: desktop, contentType: 'image/png' });
+  await page.setViewportSize({ width: 390, height: 844 });
+  const mobile = testInfo.outputPath('language-hindi-mobile.png');
+  await page.screenshot({ path: mobile, fullPage: true });
+  await testInfo.attach('Hindi mobile', { path: mobile, contentType: 'image/png' });
+  await page.setViewportSize({ width: 1440, height: 1000 });
+
+  await page.getByRole('group', { name: 'Text language', exact: true }).getByRole('button', { name: 'English', exact: true }).click();
+  await expectLanguage(page, 'en');
+  await expect(page.getByLabel('Roadmap text', { exact: true })).toHaveValue(draft);
+  await expectLabelsFit(page);
 });
 
 test('generates connected cards with exact LaTeX source and the requested colors', async ({ page }) => {
@@ -260,8 +398,7 @@ test('downloads a complete tall vector roadmap directly on a readable continuous
   expect(compact).toContain('Acontinuoussequence');
   expect(compact).toContain('LASTPOINT');
   for (let index = 1; index < 35; index += 1) expect(compact).toContain(`Point${index}withaformula`);
-  expect(result.fontNames.some(name => /Balsamiq/i.test(name))).toBe(true);
-  expect(result.fontNames.some(name => /KaTeX/i.test(name))).toBe(true);
+  expect(result.fontNames.some(name => /BalsamiqSans.*Regular/i.test(name))).toBe(true);
   await testInfo.attach('complete-tall-roadmap.pdf', { path, contentType: 'application/pdf' });
 });
 
@@ -297,8 +434,9 @@ $$a = \frac{F}{m}$$
 - Root $\sqrt{x^2 + y^2}$
 - Greek symbols θ and π stay readable
 - Literal notation ${literalNotation}
+- Specialist alphabets $\mathcal{F}$ and $\mathbb{R}$
 - ${wrapped}`;
-  await generate(page, outline, 9);
+  await generate(page, outline, 10);
   const source = await sourceGeometry(page);
   const path = testInfo.outputPath('formulas-and-greek-symbols.pdf');
   const result = await downloadPDF(page, path, 'formulas-and-greek-symbols.pdf');
@@ -308,10 +446,35 @@ $$a = \frac{F}{m}$$
   expect(compact).toContain("Newton'sequationF=ma");
   expect(compact).toContain('Greek symbols θ and π stay readable'.replace(/\s+/g, ''));
   expect(compact).toContain(literalNotation.replace(/\s+/g, ''));
+  expect(compact).toContain('SpecialistalphabetsFandR');
   expect(result.text).toContain('Acceleration');
   expect(result.text).toContain('Root');
   expect(result.fontNames.filter(name => /KaTeX/i.test(name)).length).toBeGreaterThanOrEqual(2);
   await testInfo.attach('formulas-and-greek-symbols.pdf', { path, contentType: 'application/pdf' });
+});
+
+test('downloads Hindi conjuncts, mixed English, and formulas with the selected bold font', async ({ page }, testInfo) => {
+  test.setTimeout(120_000);
+  await page.getByRole('group', { name: 'Text language', exact: true }).getByRole('button', { name: 'हिन्दी', exact: true }).click();
+  await expectLanguage(page, 'hi');
+  await generate(page, HINDI_OUTLINE, 8);
+  await expect(page.locator('.react-flow__node .katex')).toHaveCount(2);
+  await expectLabelsFit(page);
+  const source = await sourceGeometry(page);
+  const path = testInfo.outputPath('hindi-and-english.pdf');
+  const result = await downloadPDF(page, path, 'hindi-and-english.pdf');
+  expectSourceFitsPDF(result, source);
+  const compact = result.text.replace(/\s+/g, '');
+  for (const label of ['Hindi and English', 'विज्ञान और गति', 'शिक्षा, शक्ति और त्रिकोणमिति', 'किसी वस्तु का बल', 'क्षेत्रफल', 'अंतिम विचार', 'विद्यार्थी का प्रश्न: क्षितिज और दृष्टि']) {
+    expect(compact).toContain(label.replace(/\s+/g, ''));
+  }
+  expect(compact).toContain('F=ma');
+  expect(compact).toContain('Englishwordsstayreadable');
+  expect(compact).toContain('withoutlosinganypartofthesentence');
+  expect(result.actualText.join('')).toContain('शिक्षा');
+  expect(result.rawText).toMatch(/[\u0900-\u097f]/);
+  expect(result.fontNames.some(name => /NotoSansDevanagari.*Bold/i.test(name))).toBe(true);
+  await testInfo.attach('hindi-and-english.pdf', { path, contentType: 'application/pdf' });
 });
 
 test('reports a failed font download and allows PDF export to be retried', async ({ page }, testInfo) => {

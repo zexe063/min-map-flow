@@ -15,6 +15,7 @@
    explicitly styled alphabets, sized operators, and delimiter pieces intact. */
 .math-formula .katex :is(.mathnormal, .mathrm, .textrm, .mainrm, .mathsf, .textsf) {
   font-family: var(--app-font);
+  font-weight: var(--app-font-weight);
   font-style: normal;
 }
 .math-formula .katex .accent-body { font-family: KaTeX_Main, serif; }
@@ -38,7 +39,7 @@
   color: #000;
   font-family: var(--app-font);
   font-size: 17px;
-  font-weight: 400;
+  font-weight: var(--app-font-weight);
   line-height: 1.4;
   text-align: center;
 }
